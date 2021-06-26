@@ -39,64 +39,7 @@
 #include <ESP8266WiFi.h>
 #include <WebSocketsClient.h>
 
-/*-------------------------------------------------------------*/
-/* Define IO Port */
-#define OLED_SCL		9			//GPIO9
-#define OLED_SDA		10			//GPIO10
-#define OLED_ID			0x3C		//I2c Address
-
-#define DHT_PIN			12			//GPIO12
-#define DHT_TYPE		DHT11
-
-#define CTR_PUMP		5			//GPIO5
-#define CTR_LIGHT		0			//GPIO0
-#define CTR_BTNMODE 	4			//GPIO4
-#define CTR_BTNCTR		14			//GPIO15
-
-#define CTR_MODE_AUTO		0
-#define CTR_MODE_MANU_PUMP	1
-#define CTR_MODE_MANU_LIGH	2
-
-#define CTR_TEMP_MIN	17
-#define CTR_TEMP_MAX	20
-#define CTR_HUMD_MIN	70
-#define CTR_HUMD_MAX	80
-
-#define ON				1
-#define OFF				0
-
-/* Define Name */
-// device name
-#define	DV_MODE			1
-#define DV_PUMP			2
-#define DV_LIGHT		3
-
-// message control device
-#define SUCCEEDED_SET_MODE_AUTO				1
-#define FAILED_SET_MODE_AUTO				2
-#define SUCCEEDED_SET_MODE_MANU_PUMP		3
-#define FAILED_SET_MODE_MANU_PUMP			4
-#define SUCCEEDED_SET_MODE_MANU_LIGH		5
-#define FAILED_SET_MODE_MANU_LIGH			6
-
-#define SUCCEEDED_SET_PUMP_ON				1
-#define FAILED_SET_PUMP_ON					2
-#define SUCCEEDED_SET_PUMP_OFF				3
-#define FAILED_SET_PUMP_OFF					4
-
-#define SUCCEEDED_SET_LIGH_ON				1
-#define FAILED_SET_LIGH_ON					2
-#define SUCCEEDED_SET_LIGH_OFF				3
-#define FAILED_SET_LIGH_OFF					4
-
-#define CURRENT_MODE_STS_AUTO				1
-#define CURRENT_MODE_STS_MANU_PUMP			2
-#define CURRENT_MODE_STS_MANU_LIGH			3
-#define CURRENT_PUMP_STS_ON					4
-#define CURRENT_PUMP_STS_OFF				5
-#define CURRENT_LIGH_STS_ON					6
-#define CURRENT_LIGH_STS_OFF				7
-
+#include "MainFarmIOT.h"
 /*-------------------------------------------------------------*/
 /* Object Declare */
 
@@ -106,9 +49,8 @@ const char* pass = "3316246269881";
 SSD1306 displayOLED(OLED_ID, OLED_SDA, OLED_SCL);
 DHT sensorDHT(DHT_PIN, DHT_TYPE);
 
-//Ticker ticker10ms;
-//Ticker ticker100ms;
-//Ticker ticker1000ms;
+Ticker ticker300ms;
+Ticker ticker1000ms;
 
 WebSocketsClient webSocket;
 const char* host = "192.168.0.6";			//use cmd ipconfig to know localhost ip
@@ -125,60 +67,60 @@ struct sensor_dht_data
 struct control_mode
 {
 	uint8_t ctrMode;			//0: Auto, 1: Manual
-	uint8_t pumpSts;
-	uint8_t lightSts;
+	bool pumpSts;
+	bool lightSts;
+
+	bool btnModePressFlag;
+	bool btnCtrPressFlag;
+
+	bool serverConSts;				// server connection status
 
 } CTRLSYSTEM;
 
 /*-------------------------------------------------------------*/
 /* Function Prototype */
-void systemInit();
-void variableInit();
-void task10ms_Schedule();
-void task100ms_Schedule();
-void task1000ms_Schedule();
-void mainControl();
-
-void readSensorDHT();
-void displaySystemInfor();
-void blinkLED();
-bool isButtonPress_3000ms();
-bool isButtonPress_150ms();
-void controlAutoMode();
-void controlManualMode(uint8_t manu_mode);
-void checkChangeMode();
-void selectControlMode();
-
-void syncControlSystem(uint8_t control_element);
-void updateDataToServerCycle1000ms();
-void sendSetResultToServer(uint8_t device, uint8_t message);
-void updateCtrSystemValue(uint8_t system_element, uint8_t value);
-void togglePump();
-bool controlSetPumpState(bool set_status);
-void toggleLight();
-bool controlSetLightState(bool set_status);
-String returnStrCtrMode(uint8_t control_mode);
+void ICACHE_RAM_ATTR handleINT_BTNmode();
+void ICACHE_RAM_ATTR handleINT_BTNctr();
 
 /*-------------------------------------------------------------*/
-/* Task List */
-void task10ms_Schedule()
-{
-	//Serial.printf("task10ms: %d \n", millis());
-	mainControl();
+// the setup function runs once when you press reset or power the board
+void setup() {
+	systemInit();
+	variableInit();
+
+	networkInit();
+	exINTbuttonInit();
+
+	delay(200);
+	updateDataToServerCycle1000ms();
+
+	delay(100);
+
+	ticker300ms.attach_ms_scheduled(TASK_SHORT_TIME, taskShortTimeSchedule);
+	ticker1000ms.attach_ms_scheduled(TASK_LONG_TIME, taskLongTimeSchedule);
 
 }
 
-void task100ms_Schedule()
+
+// the loop function runs over and over again until power down or reset
+void loop() {
+	//do no thing
+}
+
+/*-------------------------------------------------------------*/
+void taskShortTimeSchedule()
 {
 	//Serial.printf("task100ms: %d \n", millis());
-	blinkLED();
+	mainControl();
 	readSensorDHT();
 	displaySystemInfor();
+	webSocket.loop();
 
 }
 
-void task1000ms_Schedule()
+void taskLongTimeSchedule()
 {
+	blinkLED();
 	updateDataToServerCycle1000ms();
 }
 
@@ -189,9 +131,11 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length)
 	{
 	case WStype_DISCONNECTED:
 		Serial.println("[WSc]Disconneted!");
+		CTRLSYSTEM.serverConSts = false;
 		break;
 	case WStype_CONNECTED:
 		Serial.println("[WSc]Connected!");
+		CTRLSYSTEM.serverConSts = true;
 		break;
 	case WStype_TEXT:
 		Serial.printf("[WSc]get text: %s\n", payload);
@@ -276,29 +220,23 @@ void updateDataToServerCycle1000ms()
 	}
 
 	// update current Pump status
-	switch (CTRLSYSTEM.pumpSts)
+	if (CTRLSYSTEM.pumpSts == ON)
 	{
-	case ON:
 		webSocket.sendTXT("CURRENT_PUMP_STS_ON");
-		break;
-	case OFF:
+	}
+	else if (CTRLSYSTEM.pumpSts == OFF)
+	{
 		webSocket.sendTXT("CURRENT_PUMP_STS_OFF");
-		break;
-	default:
-		break;
 	}
 
 	// update current Light status
-	switch (CTRLSYSTEM.lightSts)
+	if (CTRLSYSTEM.lightSts == true)
 	{
-	case ON:
 		webSocket.sendTXT("CURRENT_LIGH_STS_ON");
-		break;
-	case OFF:
+	}
+	else if (CTRLSYSTEM.lightSts == false)
+	{
 		webSocket.sendTXT("CURRENT_LIGH_STS_OFF");
-		break;
-	default:
-		break;
 	}
 
 	// update current DHT temperature
@@ -494,96 +432,19 @@ bool controlSetLightState(bool set_status)
 	}
 }
 
-
-/*-------------------------------------------------------------*/
-// the setup function runs once when you press reset or power the board
-void setup() {
-	systemInit();
-	variableInit();
-
-	Serial.print("Connect to WiFi: ");
-	Serial.print(ssid);
-	WiFi.mode(WIFI_STA);
-	WiFi.begin(ssid, pass);
-	while (WiFi.status() != WL_CONNECTED)
-	{
-		delay(500);
-		Serial.print('.');
-	}
-
-	Serial.println();
-	Serial.print("Connected. ESP8266 IP: ");
-	Serial.println(WiFi.localIP());
-
-	webSocket.begin(host, port);
-	delay(100);
-
-	webSocket.onEvent(webSocketEvent);
-	delay(500);
-
-	updateDataToServerCycle1000ms();
-	delay(200);
-
-	//ticker10ms.attach_ms_scheduled(10, task10ms_Schedule);
-	//ticker100ms.attach_ms_scheduled(100, task100ms_Schedule);
-	//ticker1000ms.attach_ms_scheduled(1000, task1000ms_Schedule);
-	//delay(100);
-
-}
-
-void testBlinkLED()
-{
-	for (int i = 0; i < 6; i++)
-	{
-		digitalWrite(LED_BUILTIN, HIGH);
-		delay(30);
-		digitalWrite(LED_BUILTIN, LOW);
-		delay(30);
-	}
-}
-
-// the loop function runs over and over again until power down or reset
-void loop() {
-	//Use Ticker 10ms. 100ms for control OS
-	mainControl();
-	blinkLED();
-	readSensorDHT();
-	displaySystemInfor();
-	updateDataToServerCycle1000ms();
-	webSocket.loop();
-  delay(500);
-
-}
-
-/*-------------------------------------------------------------*/
 void mainControl()
 {
-	checkChangeMode();
-	selectControlMode();
-
-}
-
-void selectControlMode()
-{
-	switch (CTRLSYSTEM.ctrMode)
+	checkButtonControlManu();
+	if (CTRLSYSTEM.ctrMode == CTR_MODE_AUTO)
 	{
-	case CTR_MODE_AUTO:
 		controlAutoMode();
-		break;
-	case CTR_MODE_MANU_PUMP:
-		controlManualMode(CTR_MODE_MANU_PUMP);
-		break;
-	case CTR_MODE_MANU_LIGH:
-		controlManualMode(CTR_MODE_MANU_LIGH);
-		break;
-	default:
-		break;
 	}
+
 }
 
-void checkChangeMode()
+void checkButtonControlManu()
 {
-	if (isButtonPress_3000ms())
+	if (CTRLSYSTEM.btnModePressFlag == true)
 	{
 		switch (CTRLSYSTEM.ctrMode)
 		{
@@ -599,8 +460,26 @@ void checkChangeMode()
 		default:
 			break;
 		}
+
+		CTRLSYSTEM.btnModePressFlag = false;	//reset for next check
 	}
 
+	if (CTRLSYSTEM.btnCtrPressFlag == true)
+	{
+		switch (CTRLSYSTEM.ctrMode)
+		{
+		case CTR_MODE_MANU_PUMP:
+			togglePump();
+			break;
+		case CTR_MODE_MANU_LIGH:
+			toggleLight();
+			break;
+		default:
+			break;
+		}
+
+		CTRLSYSTEM.btnCtrPressFlag = false;		//reset for next check
+	}
 }
 
 void controlAutoMode()
@@ -629,88 +508,37 @@ void controlAutoMode()
 
 }
 
-void controlManualMode(uint8_t manu_mode)
-{
-	if (isButtonPress_150ms())
-	{
-		switch (manu_mode)
-		{
-		case CTR_MODE_MANU_PUMP:
-			togglePump();
-			break;
-		case CTR_MODE_MANU_LIGH:
-			toggleLight();
-			break;
-		default:
-			break;
-		}
-	}
-}
-
-bool isButtonPress_150ms()
-{
-	static uint16_t pressCnt = 0;
-
-	//Serial.printf("press100ms: %d, mili: %d \n", pressCnt, millis());
-	if (digitalRead(CTR_BTNCTR) == 0)
-	{
-		if (pressCnt < 20)
-		{
-			pressCnt++;
-			return false;
-		}
-		else
-		{
-			return true;
-		}
-	}
-	else
-	{
-		pressCnt = 0;
-		return false;
-	}
-
-}
-
-bool isButtonPress_3000ms()
-{
-	static uint16_t pressCnt = 0;
-
-	//Serial.printf("press3000ms: %d, mili: %d \n", pressCnt, millis());
-	if (digitalRead(CTR_BTNMODE) == 0)
-	{
-		if (pressCnt < 20)
-		{
-			pressCnt++;
-			return false;
-		}
-		else
-		{
-			return true;
-		}
-	}
-	else
-	{
-		pressCnt = 0;
-		return false;
-	}
-
-}
-
 void displaySystemInfor()
 {
 	displayOLED.clear();
 	displayOLED.setFont(ArialMT_Plain_10);
 	displayOLED.drawString(0, 0, "__FARM SYSTEM__");
-	displayOLED.drawString(0, 10, "Mode: " + returnStrCtrMode(CTRLSYSTEM.ctrMode));
-	displayOLED.drawString(0, 20, "Temp:" + String(DHTDATA.temp, 1) + "*C");
-	displayOLED.drawString(0, 30, "Humd:" + String(DHTDATA.humd, 1) + "%");
-	displayOLED.drawString(0, 40, "PumpSts: " + String(!CTRLSYSTEM.pumpSts) + "LighSts: " + String(!CTRLSYSTEM.lightSts));
+	displayOLED.drawString(0, 10, "Server: " + converStrConectSts(CTRLSYSTEM.serverConSts));
+	displayOLED.drawString(0, 20, "Mode: " + converStrCtrMode(CTRLSYSTEM.ctrMode));
+	displayOLED.drawString(0, 30, "Temp:" + String(DHTDATA.temp, 1) + "*C");
+	displayOLED.drawString(0, 40, "Humd:" + String(DHTDATA.humd, 1) + "%");
+	displayOLED.drawString(0, 50, "PumpSts: " + String(CTRLSYSTEM.pumpSts) + "LighSts: " + String(CTRLSYSTEM.lightSts));
 	displayOLED.display();
 
 }
 
-String returnStrCtrMode(uint8_t control_mode)
+String converStrConectSts(bool sts)
+{
+	String rteString;
+
+	if (sts == true)
+	{
+	 	rteString = "Connected";
+	}
+	else
+	{
+		rteString = "Disconnected";
+	}
+
+	return rteString;
+}
+
+String converStrCtrMode(uint8_t control_mode)
 {
 	String rteString;
 
@@ -764,12 +592,66 @@ void blinkLED()
 	digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
 }
 
+void exINTbuttonInit()
+{
+	attachInterrupt(digitalPinToInterrupt(CTR_BTNMODE), handleINT_BTNmode, FALLING);
+	attachInterrupt(digitalPinToInterrupt(CTR_BTNCTR), handleINT_BTNctr, FALLING);
+}
+
+void ICACHE_RAM_ATTR handleINT_BTNmode()
+{
+	if (digitalRead(CTR_BTNMODE) == 0)
+	{
+		if (digitalRead(CTR_BTNMODE) == 0)
+			CTRLSYSTEM.btnModePressFlag = true;
+	}
+}
+
+void ICACHE_RAM_ATTR handleINT_BTNctr()
+{
+	if (digitalRead(CTR_BTNCTR) == 0)
+	{
+		if (digitalRead(CTR_BTNCTR) == 0)
+			CTRLSYSTEM.btnCtrPressFlag = true;
+	}
+}
+
+void networkInit()
+{
+	Serial.print("Connect to WiFi: ");
+	Serial.print(ssid);
+	WiFi.mode(WIFI_STA);
+	WiFi.begin(ssid, pass);
+	while (WiFi.status() != WL_CONNECTED)
+	{
+		delay(500);
+		Serial.print('.');
+	}
+
+	Serial.println();
+	Serial.print("Connected. ESP8266 IP: ");
+	Serial.println(WiFi.localIP());
+
+	webSocket.begin(host, port);
+	delay(500);
+
+	webSocket.onEvent(webSocketEvent);
+	delay(500);
+}
+
 void variableInit()
 {
 	DHTDATA.humd = 0;
 	DHTDATA.temp = 0;
 
 	CTRLSYSTEM.ctrMode = CTR_MODE_AUTO;
+	CTRLSYSTEM.lightSts = false;
+	CTRLSYSTEM.pumpSts = false;
+
+	CTRLSYSTEM.btnCtrPressFlag = false;	//not press;
+	CTRLSYSTEM.btnCtrPressFlag = false;
+
+	CTRLSYSTEM.serverConSts = false;
 }
 
 void systemInit()
@@ -782,8 +664,9 @@ void systemInit()
 	pinMode(LED_BUILTIN, OUTPUT);
 	pinMode(CTR_PUMP, OUTPUT);
 	pinMode(CTR_LIGHT, OUTPUT);
-	pinMode(CTR_BTNMODE, INPUT);
-	pinMode(CTR_BTNCTR, INPUT);
+
+	pinMode(CTR_BTNMODE, INPUT_PULLUP);
+	pinMode(CTR_BTNCTR, INPUT_PULLUP);
 
 	digitalWrite(LED_BUILTIN, HIGH);		//Set OFF
 	digitalWrite(CTR_LIGHT, HIGH);
@@ -808,6 +691,6 @@ void systemInit()
 	Serial.println("Init Sensor DHT");
 	Serial.printf("Frist read: Temp: %.1f(*C) - Humd: %.1f(%%)", DHTDATA.temp, DHTDATA.humd);
 
-	delay(2000);
+	delay(1000);
 
 }
