@@ -53,8 +53,13 @@ Ticker ticker300ms;
 Ticker ticker1000ms;
 
 WebSocketsClient webSocket;
-const char* host = "192.168.0.6";			//use cmd ipconfig to know localhost ip
-const int port = 7777;
+/* Test Local*/
+// const char* host = "192.168.0.6";			//use cmd ipconfig to know localhost ip
+// const int port = 3000;	// port 3000 for test local
+
+/* Deploy on free server Heroku*/
+const char* host = "farm-iot-rider.herokuapp.com";
+const int port = 80;		// 80 - Hyper-Text Transfer Protocol (HTTP) mac dinh de kn toi heroku
 
 /* Global Variable Declare */
 struct sensor_dht_data
