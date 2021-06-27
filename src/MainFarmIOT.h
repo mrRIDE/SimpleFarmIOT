@@ -101,6 +101,8 @@ bool controlSetLightState(bool set_status);
 String converStrCtrMode(uint8_t control_mode);
 String converStrConectSts(bool sts);
 
+void pushDataToThingspeak();
+
 
 /*********************************** END CODE ************************************/
 #endif

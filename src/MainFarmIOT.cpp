@@ -61,6 +61,11 @@ WebSocketsClient webSocket;
 const char* host = "farm-iot-rider.herokuapp.com";
 const int port = 80;		// 80 - Hyper-Text Transfer Protocol (HTTP) mac dinh de kn toi heroku
 
+//public view: https://thingspeak.com/channels/1427824
+const char* host_thingspeak = "api.thingspeak.com";
+String writeApiKey = "4ZF09OV3NW05863M";
+WiFiClient client_ts;
+
 /* Global Variable Declare */
 struct sensor_dht_data
 {
@@ -110,12 +115,12 @@ void setup() {
 // the loop function runs over and over again until power down or reset
 void loop() {
 	//do no thing
+
 }
 
 /*-------------------------------------------------------------*/
 void taskShortTimeSchedule()
 {
-	//Serial.printf("task100ms: %d \n", millis());
 	mainControl();
 	readSensorDHT();
 	displaySystemInfor();
@@ -127,6 +132,39 @@ void taskLongTimeSchedule()
 {
 	blinkLED();
 	updateDataToServerCycle1000ms();
+	pushDataToThingspeak();
+}
+
+void pushDataToThingspeak()
+{
+    static uint8_t cycle_cnt = 0;
+
+	cycle_cnt++;
+	if (cycle_cnt > 10)
+	{
+		// after 10tik*1s ~10s -> updated to thingspeak
+		if (client_ts.connect(host_thingspeak, 80)) {
+			// Construct API request body
+			String body = "field1=" + String(DHTDATA.temp, 1) + "&field2=" + String(DHTDATA.humd, 1);
+
+			client_ts.print("POST /update HTTP/1.1\n");
+			client_ts.print("Host: api.thingspeak.com\n");
+			client_ts.print("Connection: close\n");
+			client_ts.print("X-THINGSPEAKAPIKEY: " + writeApiKey + "\n");
+			client_ts.print("Content-Type: application/x-www-form-urlencoded\n");
+			client_ts.print("Content-Length: ");
+			client_ts.print(body.length());
+			client_ts.print("\n\n");
+			client_ts.print(body);
+			client_ts.print("\n\n");
+			Serial.printf("Nhiet do %s - Do am %s\r\n", String(DHTDATA.temp, 1).c_str(), String(DHTDATA.temp, 1).c_str());
+			}
+		client_ts.stop();
+
+		cycle_cnt = 0;	//reset counter;
+		
+	}
+
 }
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length)
