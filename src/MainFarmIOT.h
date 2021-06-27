@@ -102,6 +102,8 @@ String converStrCtrMode(uint8_t control_mode);
 String converStrConectSts(bool sts);
 
 void pushDataToThingspeak();
+void pushNotifyToLINE(String message);
+void controlEquipmentCheck();
 
 
 /*********************************** END CODE ************************************/

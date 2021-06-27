@@ -33,7 +33,6 @@
 #include <SSD1306.h>
 #include <Wire.h>
 #include <DHT.h>
-#include <ESP8266WiFi.h>
 #include <Ticker.h>
 
 #include <ESP8266WiFi.h>
@@ -53,6 +52,9 @@ Ticker ticker300ms;
 Ticker ticker1000ms;
 
 WebSocketsClient webSocket;
+WiFiClientSecure client_sc;
+WiFiClient client;
+
 /* Test Local*/
 // const char* host = "192.168.0.6";			//use cmd ipconfig to know localhost ip
 // const int port = 3000;	// port 3000 for test local
@@ -60,11 +62,6 @@ WebSocketsClient webSocket;
 /* Deploy on free server Heroku*/
 const char* host = "farm-iot-rider.herokuapp.com";
 const int port = 80;		// 80 - Hyper-Text Transfer Protocol (HTTP) mac dinh de kn toi heroku
-
-//public view: https://thingspeak.com/channels/1427824
-const char* host_thingspeak = "api.thingspeak.com";
-String writeApiKey = "4ZF09OV3NW05863M";
-WiFiClient client_ts;
 
 /* Global Variable Declare */
 struct sensor_dht_data
@@ -108,7 +105,7 @@ void setup() {
 
 	ticker300ms.attach_ms_scheduled(TASK_SHORT_TIME, taskShortTimeSchedule);
 	ticker1000ms.attach_ms_scheduled(TASK_LONG_TIME, taskLongTimeSchedule);
-
+	
 }
 
 
@@ -131,35 +128,116 @@ void taskShortTimeSchedule()
 void taskLongTimeSchedule()
 {
 	blinkLED();
+	controlEquipmentCheck();
 	updateDataToServerCycle1000ms();
 	pushDataToThingspeak();
 }
 
+void controlEquipmentCheck()
+{
+	static uint8_t pre_mode_sts = CTR_MODE_AUTO;
+	static bool pre_pump_sts = false;
+	static bool pre_ligh_sts = false;
+
+	if (pre_mode_sts != CTRLSYSTEM.ctrMode)
+	{
+		pre_mode_sts = CTRLSYSTEM.ctrMode;	// update
+		if (pre_mode_sts == CTR_MODE_AUTO)
+			pushNotifyToLINE("[FarmIOT]: Changed Operation Mode: Auto");
+		else if (pre_mode_sts == CTR_MODE_MANU_PUMP)
+			pushNotifyToLINE("[FarmIOT]: Changed Operation Mode: Manu Pump");
+		else if (pre_mode_sts == CTR_MODE_MANU_LIGH)
+			pushNotifyToLINE("[FarmIOT]: Changed Operation Mode: Manu Light");
+	}
+
+	if (pre_pump_sts != CTRLSYSTEM.pumpSts)
+	{
+		pre_pump_sts = CTRLSYSTEM.pumpSts;
+		if (pre_pump_sts == ON)
+			pushNotifyToLINE("[FarmIOT]: Changed Pump Status: ON");
+		else if (pre_pump_sts == OFF)
+			pushNotifyToLINE("[FarmIOT]: Changed Pump Status: OFF");
+	}
+
+	if (pre_ligh_sts != CTRLSYSTEM.lightSts)
+	{
+		pre_ligh_sts = CTRLSYSTEM.lightSts;
+		if (pre_ligh_sts == ON)
+			pushNotifyToLINE("[FarmIOT]: Changed Light Status: ON");
+		else if (pre_ligh_sts == OFF)
+			pushNotifyToLINE("[FarmIOT]: Changed Light Status: OFF");
+	}
+
+}
+
+void pushNotifyToLINE(String message)
+{
+	const char* host_l = "notify-api.line.me";
+	const String url_l = "/api/notify";
+	const int port_l = 443;
+	const char* lineApiToken  = "ONBxq3wRdJmZLeNRMqncoyGUaqXxMgA0oTZxAbozJIx";			// makuro_ride
+	String lineMessage = "message=" + message;
+
+	client_sc.setInsecure();
+	delay(10);
+	if (!client_sc.connect(host_l, port_l))
+	{
+		Serial.println("Connection failed");
+		return;
+	}
+
+	String header = "POST " + url_l + " HTTP/1.1\r\n" +
+               "Host: " + host_l + "\r\n" +
+               "User-Agent: ESP8266\r\n" +
+               "Authorization: Bearer " + lineApiToken + "\r\n" +
+               "Connection: close\r\n" +
+               "Content-Type: application/x-www-form-urlencoded\r\n" +
+               "Content-Length: " + lineMessage.length() + "\r\n";
+
+	client_sc.print(header);
+	client_sc.print("\r\n");
+	client_sc.print(lineMessage + "\r\n");
+	
+	Serial.print("request sent:");
+	Serial.println(lineMessage);
+	
+	String res = client_sc.readString();
+	Serial.println(res);
+	client_sc.stop();
+
+}
+
 void pushDataToThingspeak()
 {
-    static uint8_t cycle_cnt = 0;
+    //public view: https://thingspeak.com/channels/1427824
+	const char* host_thingspeak = "api.thingspeak.com";
+	const int port = 80;
+	String writeApiKey = "4ZF09OV3NW05863M";
+	static uint8_t cycle_cnt = 0;
 
 	cycle_cnt++;
-	if (cycle_cnt > 10)
+	if (cycle_cnt > 5)
 	{
 		// after 10tik*1s ~10s -> updated to thingspeak
-		if (client_ts.connect(host_thingspeak, 80)) {
+		if (client.connect(host_thingspeak, port)) 
+		{
 			// Construct API request body
 			String body = "field1=" + String(DHTDATA.temp, 1) + "&field2=" + String(DHTDATA.humd, 1);
 
-			client_ts.print("POST /update HTTP/1.1\n");
-			client_ts.print("Host: api.thingspeak.com\n");
-			client_ts.print("Connection: close\n");
-			client_ts.print("X-THINGSPEAKAPIKEY: " + writeApiKey + "\n");
-			client_ts.print("Content-Type: application/x-www-form-urlencoded\n");
-			client_ts.print("Content-Length: ");
-			client_ts.print(body.length());
-			client_ts.print("\n\n");
-			client_ts.print(body);
-			client_ts.print("\n\n");
+			client.print("POST /update HTTP/1.1\n");
+			client.print("Host: api.thingspeak.com\n");
+			client.print("Connection: close\n");
+			client.print("X-THINGSPEAKAPIKEY: " + writeApiKey + "\n");
+			client.print("Content-Type: application/x-www-form-urlencoded\n");
+			client.print("Content-Length: ");
+			client.print(body.length());
+			client.print("\n\n");
+			client.print(body);
+			client.print("\n\n");
+			
+			client.stop();
 			Serial.printf("Nhiet do %s - Do am %s\r\n", String(DHTDATA.temp, 1).c_str(), String(DHTDATA.temp, 1).c_str());
-			}
-		client_ts.stop();
+		}
 
 		cycle_cnt = 0;	//reset counter;
 		
