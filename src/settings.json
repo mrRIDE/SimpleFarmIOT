@@ -1,0 +1,38 @@
+{
+    "interval": 10000,
+    "ssid": "SSID",
+    "password": "PASS",
+    "connectionString": "HostName=***;DeviceId=***:***;SharedAccessKey=***",
+    "mqttServer": "192.168.50.2",
+    "mqttPort": 1883,
+    "mqttUser": "username",
+    "mqttPass": "password",
+    "mqttRoutingKey": "key",
+    "samp_msec": 10,
+    "ip": "192.168.50.3",
+    "subnet": "255.255.255.0",
+    "gateway": "192.168.50.1",
+    "dns": "192.168.50.1",
+    "sensors":[
+        {
+            "enabled": true,
+            "pin": 35,
+            "userKey": "ProductionCenterUserKey1",
+            "vMin": 1.0,
+            "vMax": 4.0,
+            "ampMax": 30.0,
+            "ampThreshold": 2.0,
+            "sampCount": 3
+        },
+        {
+            "enabled": false,
+            "pin": 36,
+            "userKey": "ProductionCenterUserKey2",
+            "vMin": 0.0,
+            "vMax": 5.0,
+            "ampMax": 5000.0,
+            "ampThreshold": 28.0,
+            "sampCount": 3
+        }
+    ]
+}
